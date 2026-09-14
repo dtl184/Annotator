@@ -1,0 +1,6 @@
+flask>=3.0
+# Optional, only used if present:
+#   pandas + pyarrow -> read meta/episodes/*.parquet for episode boundary markers
+#   lerobot          -> canonical fps / metadata
+pandas
+pyarrow

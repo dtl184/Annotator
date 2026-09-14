@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Segment annotator</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="menubar">
+    <div class="menu" data-menu>
+      <button class="menu-trigger" type="button">File</button>
+      <div class="menu-list">
+        <button type="button" data-action="open">Open dataset…</button>
+        <button type="button" data-action="save">Save now<span class="hint">S</span></button>
+        <div class="menu-sep"></div>
+        <div class="menu-label">Export</div>
+        <button type="button" data-action="export-json">Annotations as JSON</button>
+        <button type="button" data-action="export-csv">Clips as CSV</button>
+        <div class="menu-sep"></div>
+        <button type="button" data-action="reveal">Show file location</button>
+      </div>
+    </div>
+    <div class="menu" data-menu>
+      <button class="menu-trigger" type="button">View</button>
+      <div class="menu-list">
+        <button type="button" data-action="fit">Fit timeline to window<span class="hint">F</span></button>
+        <button type="button" data-action="zoom-in">Zoom in<span class="hint">+</span></button>
+        <button type="button" data-action="zoom-out">Zoom out<span class="hint">-</span></button>
+        <div class="menu-sep"></div>
+        <button type="button" data-action="shortcuts">Keyboard shortcuts<span class="hint">?</span></button>
+      </div>
+    </div>
+  </div>
+
+  <div class="topbar-title">
+    <span id="ds-name">No dataset open</span>
+    <select id="file-select" class="bare-select" title="Video file in this dataset"></select>
+  </div>
+
+  <div class="topbar-right">
+    <span class="save-state" id="save-state" data-state="idle">Saved</span>
+  </div>
+</header>
+
+<main class="stage" id="stage">
+  <section class="viewer" id="viewer">
+    <div class="views" id="views">
+      <div class="empty-state">
+        <p>Open a LeRobot dataset to start annotating.</p>
+        <button class="btn primary" type="button" data-action="open">Open dataset</button>
+      </div>
+    </div>
+    <div class="transport">
+      <button class="btn icon" type="button" data-action="step-back" title="Back one frame (←)">&#9664;|</button>
+      <button class="btn icon play" type="button" data-action="play" title="Play / pause (space)">&#9654;</button>
+      <button class="btn icon" type="button" data-action="step-fwd" title="Forward one frame (→)">|&#9654;</button>
+      <div class="timecode" id="timecode">00:00:00.000</div>
+      <div class="timecode muted" id="duration">/ 00:00:00.000</div>
+      <label class="rate">
+        <select id="rate">
+          <option value="0.25">0.25x</option>
+          <option value="0.5">0.5x</option>
+          <option value="1" selected>1x</option>
+          <option value="1.5">1.5x</option>
+          <option value="2">2x</option>
+          <option value="4">4x</option>
+        </select>
+      </label>
+      <button class="btn" type="button" data-action="auto-annotate-segment" title="Auto-annotate segment">Auto-annotate</button>
+      <button class="btn" type="button" data-action="mark-in" title="Start selection at playhead (I)">Mark in</button>
+      <button class="btn" type="button" data-action="mark-out" title="End selection at playhead (O)">Mark out</button>
+      <button class="btn accent" type="button" data-action="create-clip" title="Create clip from selection (C)">Create clip</button>
+    </div>
+  </section>
+
+  <aside class="side" id="side">
+    <div class="panel" id="inspector-panel">
+      <h2>Clip</h2>
+      <div id="inspector" class="inspector">
+        <p class="muted">Select a clip to edit it, or drag on a layer to mark a segment.</p>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>Stats</h2>
+      <dl class="stats" id="stats"></dl>
+    </div>
+  </aside>
+</main>
+
+<div class="hsplit" id="hsplit" title="Drag to resize"></div>
+
+<section class="timeline" id="timeline">
+  <div class="tl-head">
+    <div class="tl-head-ruler">
+      <button class="btn small" type="button" data-action="zoom-out">&minus;</button>
+      <button class="btn small" type="button" data-action="fit">Fit</button>
+      <button class="btn small" type="button" data-action="zoom-in">+</button>
+    </div>
+    <div class="tl-head-lanes" id="lane-heads"></div>
+  </div>
+  <div class="tl-body" id="tl-body">
+    <div class="tl-scroll" id="tl-scroll">
+      <div class="ruler" id="ruler"></div>
+      <div class="grid" id="grid"></div>
+      <div class="lanes" id="lanes"></div>
+      <div class="playhead" id="playhead"><div class="playhead-grip"></div></div>
+    </div>
+  </div>
+</section>
+
+<!-- Open dataset dialog -->
+<div class="overlay" id="open-modal" hidden>
+  <div class="dialog">
+    <header>
+      <h2>Open dataset</h2>
+      <button class="btn icon close" type="button" data-close>&times;</button>
+    </header>
+    <div class="path-bar">
+      <button class="btn small" type="button" id="browse-up">Up</button>
+      <input type="text" id="browse-path" spellcheck="false" placeholder="/path/to/dataset">
+      <button class="btn small" type="button" id="browse-go">Go</button>
+    </div>
+    <div class="browser">
+      <div class="browser-col" id="browse-list"></div>
+      <div class="browser-col" id="group-list">
+        <p class="muted pad">Pick a dataset folder on the left.</p>
+      </div>
+    </div>
+    <footer>
+      <div class="muted" id="browse-status"></div>
+      <button class="btn" type="button" data-close>Cancel</button>
+    </footer>
+  </div>
+</div>
+
+<div class="overlay" id="shortcuts-modal" hidden>
+  <div class="dialog narrow">
+    <header><h2>Keyboard shortcuts</h2><button class="btn icon close" type="button" data-close>&times;</button></header>
+    <ul class="shortcuts">
+      <li><kbd>Space</kbd> Play / pause</li>
+      <li><kbd>&larr;</kbd> <kbd>&rarr;</kbd> Step one frame</li>
+      <li><kbd>Shift</kbd>+<kbd>&larr;</kbd>/<kbd>&rarr;</kbd> Step one second</li>
+      <li><kbd>I</kbd> / <kbd>O</kbd> Mark selection in / out at playhead</li>
+      <li><kbd>C</kbd> or <kbd>Enter</kbd> Create clip from selection</li>
+      <li><kbd>Esc</kbd> Clear selection</li>
+      <li><kbd>Delete</kbd> Delete selected clip</li>
+      <li><kbd>1</kbd>&ndash;<kbd>9</kbd> Make that layer active</li>
+      <li><kbd>+</kbd> / <kbd>-</kbd> / <kbd>F</kbd> Zoom in, out, fit</li>
+      <li><kbd>S</kbd> Save now</li>
+    </ul>
+  </div>
+</div>
+
+<div class="toast" id="toast" hidden></div>
+
+<script src="{{ url_for('static', filename='util.js') }}"></script>
+<script src="{{ url_for('static', filename='player.js') }}"></script>
+<script src="{{ url_for('static', filename='timeline.js') }}"></script>
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
