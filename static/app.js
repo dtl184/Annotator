@@ -444,7 +444,7 @@ function refreshCreateButton() {
 
 function refreshAutoAnnotateSegment() {
   console.log("refreshAutoAnnotateSegment");
-  const btn = document.querySelector('[data-action="create-clip"]');
+  const btn = document.querySelector('[data-action="auto-annotate-segment"]');
   if (btn) btn.disabled = !timeline.selection;
 }
 

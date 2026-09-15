@@ -432,6 +432,8 @@ class Timeline {
     let start = Math.min(sel.start, sel.end);
     let end = Math.max(sel.start, sel.end);
     if (end - start < 1e-3) { U.toast('That segment is too short'); return null; }
+
+    
   }
 
   /** Turn the current selection into a real clip. */
