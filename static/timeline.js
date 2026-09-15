@@ -423,6 +423,17 @@ class Timeline {
     this.setSelection(next);
   }
 
+  autoAnnotateSegment() {
+    const sel = this.selection;
+    if (!sel) { U.toast('Drag on a layer to mark a segment first'); return null; }
+    const layer = this.layerById(sel.layerId);
+    if (!layer) return null;
+
+    let start = Math.min(sel.start, sel.end);
+    let end = Math.max(sel.start, sel.end);
+    if (end - start < 1e-3) { U.toast('That segment is too short'); return null; }
+  }
+
   /** Turn the current selection into a real clip. */
   createClip(text = '') {
     const sel = this.selection;

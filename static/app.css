@@ -171,7 +171,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
   gap: 1px;
   background: var(--line-soft);
 }
-.view { position: relative; min-width: 0; background: #000; display: flex; }
+.view { position: initial; min-width: 0; background: #000; display: flex; }
 .view video { width: 100%; height: 100%; object-fit: contain; background: #000; }
 .view-label {
   position: absolute;

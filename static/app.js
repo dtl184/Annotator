@@ -442,6 +442,12 @@ function refreshCreateButton() {
   if (btn) btn.disabled = !timeline.selection;
 }
 
+function refreshAutoAnnotateSegment() {
+  console.log("refreshAutoAnnotateSegment");
+  const btn = document.querySelector('[data-action="create-clip"]');
+  if (btn) btn.disabled = !timeline.selection;
+}
+
 const actions = {
   open: () => { openModal('open-modal'); browse(state.browsePath); },
   save: () => { saveSoon.flush(); },
@@ -455,6 +461,7 @@ const actions = {
   play: () => player.toggle(),
   'step-back': () => player.step(-1),
   'step-fwd': () => player.step(1),
+  'auto-annotate-segment': () => { timeline.autoAnnotateSegment(); refreshAutoAnnotateSegment(); },
   'mark-in': () => { timeline.mark('in'); refreshCreateButton(); },
   'mark-out': () => { timeline.mark('out'); refreshCreateButton(); },
   'create-clip': () => { timeline.createClip(); refreshCreateButton(); },
