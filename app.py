@@ -13,39 +13,42 @@ import os
 from pathlib import Path
 from typing import Any
 
-from flask import (
-    Flask,
-    Response,
-    abort,
-    jsonify,
-    render_template,
-    request,
-    send_file,
-)
+from flask import Flask, Response, abort, jsonify, render_template, request, send_file
 
 import dataset as ds
-from store import ProjectStore, to_csv_rows
+from store import ProjectStore, dataset_key, timeline_summary, to_csv_rows
+
+# Bumped whenever the shape of an /api response changes. The frontend checks
+# it so a stale server process reports version skew instead of throwing a
+# TypeError deep in the client. Static files are re-read from disk per request,
+# so new JS goes live immediately while an already-running Python process does
+# not - that skew is easy to hit and confusing without this.
+API_VERSION = 2
 
 app = Flask(__name__)
 # Keep the logical field order in responses; these JSON files are meant to be read.
 app.json.sort_keys = False
+# Never let the browser cache the frontend in a dev tool; a stale app.js against
+# a fresh server is the mirror image of the same problem.
+app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 
-# Populated by main(); safe defaults so `flask --app annotator.app run` works too.
 app.config.setdefault("DATA_ROOTS", [Path.home() / ".cache" / "huggingface" / "lerobot", Path.home()])
 app.config.setdefault("ANNOTATIONS_DIR", Path.cwd() / "annotations")
-app.config.setdefault("RECENT_FILE", Path.cwd() / "annotations" / ".recent.json")
 
 
 def store() -> ProjectStore:
     return ProjectStore(Path(app.config["ANNOTATIONS_DIR"]))
 
+
 def cache_for(root: Path) -> ds.DurationCache:
     """Duration cache lives beside the annotations, one file per dataset."""
     path = Path(app.config["ANNOTATIONS_DIR"]) / dataset_key(root) / ".durations.json"
     return ds.DurationCache(path)
-# --------------------------------------------------------------------------
-# helpers
-# --------------------------------------------------------------------------
+
+
+def recent_file() -> Path:
+    return Path(app.config["ANNOTATIONS_DIR"]) / ".recent.json"
+
 
 def _safe_root(raw: str | None) -> Path:
     if not raw:
@@ -57,7 +60,7 @@ def _safe_root(raw: str | None) -> Path:
 
 
 def _remember(root: Path) -> None:
-    path = Path(app.config["RECENT_FILE"])
+    path = recent_file()
     path.parent.mkdir(parents=True, exist_ok=True)
     items: list[str] = []
     if path.is_file():
@@ -72,29 +75,23 @@ def _remember(root: Path) -> None:
         pass
 
 
-# --------------------------------------------------------------------------
-# pages
-# --------------------------------------------------------------------------
-
 @app.get("/")
 def index() -> str:
     return render_template("index.html")
 
 
 # --------------------------------------------------------------------------
-# api: browsing the filesystem for datasets
+# browsing
 # --------------------------------------------------------------------------
 
 @app.get("/api/browse")
 def api_browse() -> Response:
-    """List subdirectories of `path`, flagging which ones are datasets."""
     raw = request.args.get("path")
     if raw:
         current = Path(os.path.expanduser(raw)).resolve()
     else:
         roots = [Path(p).expanduser() for p in app.config["DATA_ROOTS"]]
         current = next((r for r in roots if r.is_dir()), Path.home())
-
     if not current.is_dir():
         abort(404, f"No such directory: {current}")
 
@@ -108,10 +105,9 @@ def api_browse() -> Response:
         abort(403, f"Permission denied: {current}")
 
     recent: list[str] = []
-    rf = Path(app.config["RECENT_FILE"])
-    if rf.is_file():
+    if recent_file().is_file():
         try:
-            recent = json.load(open(rf))
+            recent = json.load(open(recent_file()))
         except (OSError, ValueError):
             recent = []
 
@@ -135,7 +131,6 @@ def api_dataset() -> Response:
     summary = ds.describe_dataset(root, cache)
     _remember(root)
     return jsonify(summary)
-
 
 
 # --------------------------------------------------------------------------
@@ -179,49 +174,61 @@ def _file_scope_timeline(root: Path, chunk: int, file_index: int,
         "warnings": ["Single-file mode: views are not guaranteed to be time-aligned."],
     }
 
+
 @app.get("/api/session")
 def api_session() -> Response:
+    """Everything needed to annotate. scope=dataset (default) or scope=file."""
     root = _safe_root(request.args.get("root"))
+    scope = request.args.get("scope", "dataset")
     chunk = int(request.args.get("chunk", 0))
     file_index = int(request.args.get("file", 0))
+    cache = cache_for(root)
 
-    group = ds.find_group(root, chunk, file_index)
-    if group is None:
-        abort(404, f"No video file for chunk-{chunk:03d}/file-{file_index:03d}")
+    if scope == "file":
+        timeline = _file_scope_timeline(root, chunk, file_index, cache)
+    else:
+        scope = "dataset"
+        timeline = ds.build_timeline(root, cache)
+        if not timeline["views"]:
+            abort(404, f"No videos found under {root}/videos")
 
     info = ds.read_info(root)
-    fps = float(info.get("fps", 30) or 30)
-
     st = store()
-    project = st.load(root, chunk, file_index)
+    project = st.load(root, scope, chunk, file_index)
     if project is None:
-        project = st.new_project(root, group, fps, root.name)
+        project = st.new_project(root, timeline, scope, root.name, chunk, file_index)
         st.save(project)
     else:
-        # Keep derived fields fresh without clobbering annotations.
-        project.setdefault("dataset", {})["fps"] = fps
-        project["views"] = list(group.views.keys())
-        project["episodes"] = group.episodes
-        if group.duration:
-            project["duration"] = group.duration
+        # Refresh derived fields without touching annotations.
+        project.setdefault("dataset", {})["fps"] = timeline["fps"]
+        project["views"] = list(timeline["views"].keys())
+        project["episodes"] = timeline["episodes"]
+        project["timeline"] = timeline_summary(timeline)
+        if timeline["duration"]:
+            project["duration"] = timeline["duration"]
 
-    all_groups = [
-        {"chunk_index": g.chunk_index, "file_index": g.file_index, "key": g.key, "views": len(g.views)}
+    groups = [
+        {"chunk_index": g.chunk_index, "file_index": g.file_index, "key": g.key,
+         "views": len(g.views)}
         for g in ds.scan_video_groups(root)
     ]
 
     return jsonify({
+        "api": API_VERSION,
         "dataset": {
             "root": str(root),
             "name": root.name,
-            "fps": fps,
+            "fps": timeline["fps"],
             "robot_type": info.get("robot_type"),
             "codebase_version": info.get("codebase_version"),
+            "video_files_size_in_mb": info.get("video_files_size_in_mb"),
+            "chunks_size": info.get("chunks_size"),
         },
-        "group": group.to_dict(),
-        "groups": all_groups,
+        "scope": scope,
+        "timeline": timeline,
+        "groups": groups,
         "project": project,
-        "project_path": str(st.path_for(root, chunk, file_index)),
+        "project_path": str(st.path_for(root, scope, chunk, file_index)),
     })
 
 
@@ -250,6 +257,7 @@ def api_scan() -> Response:
     root = _safe_root(request.args.get("root"))
     timeline = ds.build_timeline(root, cache_for(root))
     return jsonify({
+        "api": API_VERSION,
         "root": str(root),
         "duration": timeline["duration"],
         "fps": timeline["fps"],
@@ -267,7 +275,6 @@ def api_scan() -> Response:
     })
 
 
-
 # --------------------------------------------------------------------------
 # media
 # --------------------------------------------------------------------------
@@ -276,8 +283,8 @@ def api_scan() -> Response:
 def media() -> Response:
     """Serve an mp4 from inside the dataset root.
 
-    `conditional=True` gives us HTTP Range support, which is what makes
-    scrubbing a 3-hour file feel instant instead of downloading the whole thing.
+    conditional=True gives HTTP Range support, which is what makes scrubbing a
+    200MB file instant instead of downloading the whole thing.
     """
     root = _safe_root(request.args.get("root"))
     rel = request.args.get("path", "")
@@ -290,33 +297,29 @@ def media() -> Response:
 
 
 # --------------------------------------------------------------------------
-# export (stubs - the readable JSON is the source of truth for now)
+# export
 # --------------------------------------------------------------------------
 
 @app.get("/api/export/<fmt>")
 def api_export(fmt: str) -> Response:
     root = _safe_root(request.args.get("root"))
+    scope = request.args.get("scope", "dataset")
     chunk = int(request.args.get("chunk", 0))
     file_index = int(request.args.get("file", 0))
-    project = store().load(root, chunk, file_index)
+    project = store().load(root, scope, chunk, file_index)
     if project is None:
-        abort(404, "Nothing saved for this file yet")
+        abort(404, "Nothing saved for this dataset yet")
 
-    stem = f"{root.name}_chunk-{chunk:03d}_file-{file_index:03d}"
+    stem = root.name if scope == "dataset" else f"{root.name}_chunk-{chunk:03d}_file-{file_index:03d}"
 
     if fmt == "json":
-        body = json.dumps(project, indent=2) + "\n"
-        return Response(body, mimetype="application/json", headers={
-            "Content-Disposition": f'attachment; filename="{stem}.json"'
-        })
-
+        return Response(json.dumps(project, indent=2) + "\n", mimetype="application/json",
+                        headers={"Content-Disposition": f'attachment; filename="{stem}.json"'})
     if fmt == "csv":
         buf = io.StringIO()
         csv.writer(buf).writerows(to_csv_rows(project))
-        return Response(buf.getvalue(), mimetype="text/csv", headers={
-            "Content-Disposition": f'attachment; filename="{stem}.csv"'
-        })
-
+        return Response(buf.getvalue(), mimetype="text/csv",
+                        headers={"Content-Disposition": f'attachment; filename="{stem}.csv"'})
     abort(400, f"Unknown export format: {fmt}")
 
 
@@ -329,27 +332,49 @@ def json_errors(err: Any) -> tuple[Response, int]:
 
 # --------------------------------------------------------------------------
 
+def print_scan(root: Path, annotations_dir: Path) -> None:
+    """CLI version of /api/scan - the fastest way to see what we found."""
+    app.config["ANNOTATIONS_DIR"] = annotations_dir
+    timeline = ds.build_timeline(root, cache_for(root))
+    print(f"{root}  fps={timeline['fps']}  total={timeline['duration']:.1f}s "
+          f"({timeline['duration'] / 60:.1f} min)")
+    print(f"episodes placed: {len(timeline['episodes'])}")
+    for key, plan in timeline["views"].items():
+        print(f"\n  {key}  {len(plan['segments'])} file(s), {plan['total']:.1f}s")
+        for s in plan["segments"]:
+            print(f"    chunk-{s['chunk_index']:03d}/file-{s['file_index']:03d}  "
+                  f"{s['duration']:8.2f}s   global {s['start']:9.2f} → {s['end']:9.2f}")
+    for w in timeline["warnings"]:
+        print(f"\n  warning: {w}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Multi-layer video segment annotator")
     parser.add_argument("--data-root", action="append", default=None,
                         help="Directory to show first in Open (repeatable)")
-    parser.add_argument("--annotations-dir", default=str(Path.cwd() / "annotations"),
-                        help="Where the annotation JSON files live")
+    parser.add_argument("--annotations-dir", default=str(Path.cwd() / "annotations"))
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=5111)
     parser.add_argument("--no-debug", action="store_true")
+    parser.add_argument("--scan", metavar="DATASET",
+                        help="Print what the scanner finds for a dataset and exit")
     args = parser.parse_args()
+
+    annotations_dir = Path(os.path.expanduser(args.annotations_dir))
+    annotations_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.scan:
+        print_scan(Path(os.path.expanduser(args.scan)).resolve(), annotations_dir)
+        return
 
     roots = args.data_root or [
         str(Path.home() / ".cache" / "huggingface" / "lerobot"),
         str(Path.home()),
     ]
     app.config["DATA_ROOTS"] = [Path(os.path.expanduser(r)) for r in roots]
-    app.config["ANNOTATIONS_DIR"] = Path(os.path.expanduser(args.annotations_dir))
-    app.config["RECENT_FILE"] = app.config["ANNOTATIONS_DIR"] / ".recent.json"
-    app.config["ANNOTATIONS_DIR"].mkdir(parents=True, exist_ok=True)
+    app.config["ANNOTATIONS_DIR"] = annotations_dir
 
-    print(f"  annotations -> {app.config['ANNOTATIONS_DIR']}")
+    print(f"  annotations -> {annotations_dir}")
     print(f"  http://{args.host}:{args.port}")
     app.run(host=args.host, port=args.port, debug=not args.no_debug, threaded=True)
 

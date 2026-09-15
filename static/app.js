@@ -16,6 +16,9 @@ const state = {
   browseDataset: null,
 };
 
+// Must match API_VERSION in app.py. See checkApi() for why this exists.
+const API_VERSION = 2;
+
 const $ = (id) => document.getElementById(id);
 const player = new MultiView($('views'));
 
@@ -77,13 +80,24 @@ window.addEventListener('beforeunload', (e) => {
 
 /* ---------------- session ---------------- */
 
+/** Catch the server and the frontend being different versions of this app.
+ *  Without this you get a TypeError on session.timeline, several frames away
+ *  from the actual cause. */
+function checkApi(session) {
+  if (session && session.api === API_VERSION) return;
+  const got = session && session.api ? `v${session.api}` : 'an older response format';
+  throw new Error(
+    `The server is running a different version of this app (${got}, this page needs v${API_VERSION}). `
+    + 'Restart the Flask process to pick up the current code.');
+}
+
 async function openSession(root, scope = 'dataset', chunk = 0, file = 0) {
   try {
-    console.log("openSession", { root, scope, chunk, file });
     const q = `root=${encodeURIComponent(root)}&scope=${scope}&chunk=${chunk}&file=${file}`;
     const session = await U.api(`/api/session?${q}`);
+    checkApi(session);
     Object.assign(state, { root, scope: session.scope, chunk, file, session, project: session.project });
-    console.log("openSession: loaded", { root, scope, chunk, file, session });
+
     const tl = session.timeline;
     const label = session.scope === 'dataset'
       ? `whole recording · ${U.dur(tl.duration)}`
@@ -91,7 +105,7 @@ async function openSession(root, scope = 'dataset', chunk = 0, file = 0) {
     $('ds-name').textContent = `${session.dataset.name} · ${label}`;
     document.title = `${session.dataset.name} — segment annotator`;
     history.replaceState(null, '', `/?${q}`);
-    console.log(`openSession: ${session.dataset.name} · ${label} · ${tl.views.length} view(s)`);
+
     renderScopeSelect(session);
 
     // Each view is its own playlist: v3 splits every video key independently
@@ -105,8 +119,7 @@ async function openSession(root, scope = 'dataset', chunk = 0, file = 0) {
         url: `/media?root=${encodeURIComponent(root)}&path=${encodeURIComponent(seg.path)}`,
       })),
     }));
-    console.log(`openSession: ${plan.length} view(s) · ${U.dur(tl.duration)} · ${label}`);
-    U.toast(`Loading ${plan.length} view(s) · ${U.dur(tl.duration)}`);
+
     timeline.activeLayerId = state.project.layers[0]?.id || null;
     timeline.selectedClipId = null;
     timeline.selection = null;
@@ -116,7 +129,7 @@ async function openSession(root, scope = 'dataset', chunk = 0, file = 0) {
     $('duration').textContent = `/ ${U.tc(tl.duration)}`;
     await player.load(plan, tl.fps, tl.duration);
     player.setRate(parseFloat($('rate').value));
-    U.toast(`Loaded ${plan.length} view(s) · ${U.dur(tl.duration)}`);
+
     renderInspector(null, null);
     renderStats();
     setSaveState('idle');
@@ -429,11 +442,6 @@ function refreshCreateButton() {
   if (btn) btn.disabled = !timeline.selection;
 }
 
-function refreshAutoAnnotateButton() {
-  const btn = document.querySelector('[data-action="auto-annotate-segment"]');
-  if (btn) btn.disabled = !timeline.selection;
-}
-
 const actions = {
   open: () => { openModal('open-modal'); browse(state.browsePath); },
   save: () => { saveSoon.flush(); },
@@ -447,7 +455,6 @@ const actions = {
   play: () => player.toggle(),
   'step-back': () => player.step(-1),
   'step-fwd': () => player.step(1),
-  'auto-annotate-segment': () => {timeline.autoAnnotateSegment(); refreshAutoAnnotateButton();},
   'mark-in': () => { timeline.mark('in'); refreshCreateButton(); },
   'mark-out': () => { timeline.mark('out'); refreshCreateButton(); },
   'create-clip': () => { timeline.createClip(); refreshCreateButton(); },
