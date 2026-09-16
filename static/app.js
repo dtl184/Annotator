@@ -19,6 +19,9 @@ const state = {
 // Must match API_VERSION in app.py. See checkApi() for why this exists.
 const API_VERSION = 2;
 
+const PALETTE = ['#6EA8FF', '#7ED9A7', '#E2A0FF', '#F2B45C', '#7FD6E8', '#FF9BA8', '#B9CE6A', '#C3A1F0'];
+
+
 const $ = (id) => document.getElementById(id);
 const player = new MultiView($('views'));
 
@@ -342,8 +345,7 @@ function renderStats() {
 
 function addStyle(name, layer) {
   const p = state.project;
-  const palette = ['#6EA8FF', '#7ED9A7', '#E2A0FF', '#F2B45C', '#7FD6E8', '#FF9BA8', '#B9CE6A', '#C3A1F0'];
-  const style = { id: U.uid('st'), name, color: palette[p.styles.length % palette.length] };
+  const style = { id: U.uid('st'), name, color: PALETTE[p.styles.length % PALETTE.length] };
   p.styles.push(style);
   if (layer) layer.style_id = style.id;
   timeline.onChange('add-style');
@@ -452,7 +454,8 @@ const actions = {
   open: () => { openModal('open-modal'); browse(state.browsePath); },
   save: () => { saveSoon.flush(); },
   'export-json': () => exportAs('json'),
-  'export-lerobot': () => exportAs('lerobot'),
+  'export-lerobot': () => exportToLeRobot(),
+  'import-lerobot': () => importFromLeRobot(),
   reveal: () => U.toast(state.session ? state.session.project_path : 'Nothing open yet'),
   fit: () => timeline.fit(),
   'zoom-in': () => timeline.zoom(1.4),
@@ -548,6 +551,182 @@ window.addEventListener('keydown', (e) => {
       }
   }
 });
+
+/* ---------------- LeRobot write-back / import ---------------- */
+ 
+ 
+function ensureStyle(name) {
+  const p = state.project;
+  let style = p.styles.find((s) => s.name === name);
+  if (!style) {
+    style = { id: U.uid('st'), name, color: PALETTE[p.styles.length % PALETTE.length] };
+    p.styles.push(style);
+  }
+  return style;
+}
+ 
+function figure(value, label) {
+  return U.el('div', { class: 'figure' }, [U.el('b', { text: String(value) }), U.el('span', { text: label })]);
+}
+ 
+/** Generic preview + confirm. onConfirm null => informational only. */
+function showReport(title, nodes, confirmLabel, onConfirm, note = '') {
+  console.log("showReport", title, nodes, confirmLabel, onConfirm, note);
+  $('report-title').textContent = title;
+  console.log("showReport", title, nodes, confirmLabel, onConfirm, note);
+  const body = $('report-body');
+  body.innerHTML = '';
+  for (const n of nodes) if (n) body.appendChild(n);
+  $('report-note').textContent = note;
+  const btn = $('report-confirm');
+  btn.hidden = !onConfirm;
+  btn.textContent = confirmLabel || 'Confirm';
+  btn.onclick = onConfirm || null;
+  openModal('report-modal');
+}
+ 
+function warnBlock(warnings) {
+  if (!warnings || !warnings.length) return null;
+  return U.el('div', {}, warnings.map((w) => U.el('div', { class: 'warn', text: w })));
+}
+ 
+function exportPayload(extra) {
+  return JSON.stringify({
+    root: state.root, scope: state.scope, chunk: state.chunk, file: state.file, ...extra,
+  });
+}
+ 
+async function exportToLeRobot() {
+  if (!state.root) { U.toast('Open a dataset first'); return; }
+  saveSoon.flush();
+  try {
+    const plan = await U.api('/api/export/lerobot', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: exportPayload({ dry_run: true }),
+    });
+    renderExportPlan(plan);
+  } catch (err) {
+    U.toast(err.message, true);
+  }
+}
+ 
+function renderExportPlan(plan) {
+  const styleRows = Object.entries(plan.styles || {})
+    .map(([from, to]) => U.el('li', { class: 'mono', text: from === to ? from : `${from} → ${to}` }));
+ 
+  const nodes = [
+    U.el('div', { class: 'figures' }, [
+      figure(plan.rows, 'rows to write'),
+      figure(`${plan.episodes_annotated}/${plan.episodes_total}`, 'episodes annotated'),
+      figure(plan.episodes_cleared, 'episodes cleared'),
+    ]),
+    U.el('h3', { text: 'Styles' }),
+    U.el('ul', {}, styleRows),
+    plan.skipped && plan.skipped.length
+      ? U.el('div', {}, [
+        U.el('h3', { text: `Skipped (${plan.skipped.length})` }),
+        U.el('ul', {}, plan.skipped.slice(0, 8).map((s) => U.el('li', { text: `${s.clip}: ${s.reason}` }))),
+      ])
+      : null,
+    warnBlock(plan.warnings),
+  ];
+ 
+  const canWrite = plan.ok && plan.rows > 0;
+  showReport(
+    'Write into dataset',
+    nodes,
+    'Write to parquet',
+    canWrite ? () => applyExport() : null,
+    canWrite ? 'Rewrites data/*.parquet in place. A copy of data/ is saved first.' : 'Nothing to write.',
+  );
+}
+ 
+async function applyExport() {
+  const btn = $('report-confirm');
+  btn.disabled = true;
+  btn.textContent = 'Writing…';
+  try {
+    const done = await U.api('/api/export/lerobot', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: exportPayload({ dry_run: false, backup: true, spans: true }),
+    });
+    showReport('Written', [
+      U.el('div', { class: 'figures' }, [
+        figure(done.rows, 'rows written'),
+        figure(done.episodes_annotated, 'episodes'),
+        figure((done.written || []).length, 'shards rewritten'),
+      ]),
+      U.el('h3', { text: 'Files' }),
+      U.el('ul', {}, (done.written || []).map((w) => U.el('li', { class: 'mono', text: w }))),
+      done.backup ? U.el('p', { class: 'mono muted', text: `backup: ${done.backup}` }) : null,
+      warnBlock(done.warnings),
+    ], null, null, done.validator || '');
+    U.toast(`Wrote ${done.rows} language_persistent row(s)`);
+  } catch (err) {
+    U.toast(err.message, true);
+    closeModal('report-modal');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Write to parquet';
+  }
+}
+ 
+async function importFromLeRobot() {
+  if (!state.root) { U.toast('Open a dataset first'); return; }
+  try {
+    const q = `root=${encodeURIComponent(state.root)}&scope=${state.scope}&chunk=${state.chunk}&file=${state.file}`;
+    const found = await U.api(`/api/import/lerobot?${q}`);
+    const nodes = [
+      U.el('div', { class: 'figures' }, [
+        figure(found.clips, 'segments'),
+        figure(found.styles.length, 'styles'),
+        figure(found.episodes, 'episodes'),
+      ]),
+      U.el('h3', { text: 'Styles found' }),
+      U.el('ul', {}, found.styles.map((s) => U.el('li', {
+        class: 'mono', text: `${s} — ${found.clips_by_style[s].length} segment(s)`,
+      }))),
+      found.exact_ends === found.clips && found.clips
+        ? U.el('p', { class: 'muted', text: 'Every segment carries an exact end_timestamp, so '
+          + 'starts and ends come back as they were written.' })
+        : U.el('div', { class: 'warn', text: 'Some rows have no end_timestamp. Those segments end '
+          + 'where the next annotation of the same style begins, or at the end of their episode.' }),
+      warnBlock(found.warnings),
+    ];
+    showReport('Read from dataset', nodes, 'Add as new layers',
+      found.clips ? () => { applyImport(found); closeModal('report-modal'); } : null,
+      found.clips ? 'One new layer per style. Existing layers are left alone.' : 'Nothing found.');
+  } catch (err) {
+    U.fail(err, 'Reading from the dataset');
+  }
+}
+
+ 
+function applyImport(found) {
+  const p = state.project;
+  let added = 0;
+  for (const name of found.styles) {
+    const style = ensureStyle(name);
+    const clips = found.clips_by_style[name]
+      .map((c) => ({
+        id: U.uid('cl'),
+        start: c.start,
+        end: c.end,
+        text: c.text,
+        source: { episode_index: c.episode_index, from: 'language_persistent' },
+      }))
+      .sort((a, b) => a.start - b.start);
+    p.layers.push({ id: U.uid('ly'), style_id: style.id, clips });
+    added += clips.length;
+  }
+  timeline.render();
+  renderStats();
+  markDirty();
+  U.toast(`Added ${added} segment(s) in ${found.styles.length} new layer(s)`);
+}
+ 
 
 /* ---------------- open dialog controls ---------------- */
 

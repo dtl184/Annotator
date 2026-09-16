@@ -16,6 +16,7 @@ from typing import Any
 from flask import Flask, Response, abort, jsonify, render_template, request, send_file
 
 import dataset as ds
+import lerobot_io
 from store import ProjectStore, dataset_key, timeline_summary, to_csv_rows
 
 # Bumped whenever the shape of an /api response changes. The frontend checks
@@ -316,8 +317,78 @@ def api_export(fmt: str) -> Response:
         return Response(json.dumps(project, indent=2) + "\n", mimetype="application/json",
                         headers={"Content-Disposition": f'attachment; filename="{stem}.json"'})
     if fmt == "lerobot":
-        
+        # Deliberately not served here: this export writes into the dataset
+        # rather than returning a file, and GET must stay safe to repeat -
+        # browsers and link prefetchers fire GETs on their own.
+        abort(400, "Use POST /api/export/lerobot; it modifies the dataset in place.")
+
+    if fmt == "csv":
+        buf = io.StringIO()
+        csv.writer(buf).writerows(to_csv_rows(project))
+        return Response(buf.getvalue(), mimetype="text/csv",
+                        headers={"Content-Disposition": f'attachment; filename="{stem}.csv"'})
     abort(400, f"Unknown export format: {fmt}")
+
+
+@app.post("/api/export/lerobot")
+def api_export_lerobot() -> Response:
+    """Write the annotations into the dataset as `language_persistent`.
+
+    POST, not GET: it rewrites data/chunk-*/file-*.parquet in place. Send
+    {"dry_run": true} (the default) for the report the UI previews, then
+    {"dry_run": false} to actually write.
+    """
+    body = request.get_json(silent=True) or {}
+    root = _safe_root(body.get("root"))
+    scope = body.get("scope", "dataset")
+    chunk = int(body.get("chunk", 0))
+    file_index = int(body.get("file", 0))
+    style_map = body.get("style_map") or {}
+    role = body.get("role") or lerobot_io.DEFAULT_ROLE
+
+    project = store().load(root, scope, chunk, file_index)
+    if project is None:
+        abort(404, "Nothing saved for this dataset yet")
+
+    dry_run = body.get("dry_run", True)
+    if dry_run:
+        report = lerobot_io.plan_write_back(project, style_map, role)
+        report.pop("_staged", None)
+        return jsonify({"api": API_VERSION, "dry_run": True, **report})
+
+    try:
+        report = lerobot_io.write_back(
+            project, root,
+            style_map=style_map,
+            role=role,
+            backup=bool(body.get("backup", True)),
+            spans=bool(body.get("spans", True)),
+            backup_root=Path(app.config["ANNOTATIONS_DIR"]) / "backups",
+        )
+    except lerobot_io.ExportError as err:
+        abort(400, str(err))
+    report.pop("_staged", None)
+    return jsonify({"api": API_VERSION, "dry_run": False, **report})
+
+
+@app.get("/api/import/lerobot")
+def api_import_lerobot() -> Response:
+    """Read existing language_persistent back out as timeline layers.
+
+    Returns the proposed layers; the client merges and saves them, so nothing
+    changes until the user confirms.
+    """
+    root = _safe_root(request.args.get("root"))
+    scope = request.args.get("scope", "dataset")
+    chunk = int(request.args.get("chunk", 0))
+    file_index = int(request.args.get("file", 0))
+    project = store().load(root, scope, chunk, file_index)
+    if project is None:
+        abort(404, "Open this dataset first")
+    try:
+        return jsonify({"api": API_VERSION, **lerobot_io.plan_import(project, root)})
+    except lerobot_io.ExportError as err:
+        abort(400, str(err))
 
 
 @app.errorhandler(400)

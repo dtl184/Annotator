@@ -20,6 +20,8 @@
         <button type="button" data-action="export-json">Annotations as JSON</button>
         <button type="button" data-action="export-lerobot">LeRobot</button>
         <div class="menu-sep"></div>
+        <button type="button" data-action="import-lerobot">Read annotations from dataset…</button>
+        <div class="menu-sep"></div>
         <button type="button" data-action="reveal">Show file location</button>
       </div>
     </div>
@@ -153,6 +155,22 @@
     </ul>
   </div>
 </div>
+
+<!-- Generic report + confirm dialog (LeRobot write-back / import) -->
+<div class="overlay" id="report-modal" hidden>
+  <div class="dialog narrow wide-report">
+    <header><h2 id="report-title">Report</h2><button class="btn icon close" type="button" data-close>&times;</button></header>
+    <div class="report-body" id="report-body"></div>
+    <footer>
+      <div class="muted" id="report-note"></div>
+      <div class="row-actions">
+        <button class="btn" type="button" data-close>Cancel</button>
+        <button class="btn accent" type="button" id="report-confirm">Confirm</button>
+      </div>
+    </footer>
+  </div>
+</div>
+
 
 <div class="toast" id="toast" hidden></div>
 

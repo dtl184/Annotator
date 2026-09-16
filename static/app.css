@@ -571,6 +571,27 @@ button, input, select, textarea { font: inherit; color: inherit; }
   font-size: 10px;
 }
 .group-head { padding: 9px 12px; color: var(--text-dim); border-bottom: 1px solid var(--line-soft); background: var(--surface-2); }
+.dialog.wide-report { width: min(620px, 92vw); }
+.report-body { padding: 12px 14px; overflow-y: auto; max-height: 56vh; display: grid; gap: 10px; }
+.report-body h3 { margin: 0; font-size: 12px; color: var(--text-dim); font-weight: 600; }
+.report-body .figures { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.report-body .figure {
+  padding: 8px 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.report-body .figure b { display: block; font-family: var(--mono); font-size: 17px; font-weight: 500; }
+.report-body .figure span { color: var(--text-dim); font-size: 11px; }
+.report-body ul { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
+.report-body .warn {
+  padding: 8px 10px;
+  border-left: 2px solid var(--playhead);
+  background: rgba(255, 182, 39, .07);
+  color: var(--text);
+}
+.report-body .mono { font-family: var(--mono); font-size: 12px; }
+.row-actions { display: flex; gap: 8px; }
 
 .shortcuts { margin: 0; padding: 12px 18px; list-style: none; display: grid; gap: 7px; }
 .shortcuts li { display: flex; gap: 8px; align-items: baseline; color: var(--text-dim); }

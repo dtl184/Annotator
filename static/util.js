@@ -48,6 +48,17 @@ const U = (() => {
     return node;
   }
 
+  /** Never let an object reach textContent - that is what renders as
+   *  "[object Object]". Objects and arrays are shown as JSON instead. */
+  function asText(value) {
+    if (value === null || value === undefined) return '';
+    if (typeof value === 'string') return value;
+    if (typeof value === 'object') {
+      try { return JSON.stringify(value); } catch (_) { return String(value); }
+    }
+    return String(value);
+  }
+
   const uid = (prefix) => `${prefix}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 
   function debounce(fn, ms) {
@@ -70,13 +81,51 @@ const U = (() => {
   }
 
   let toastTimer = null;
-  function toast(message, isError = false) {
+  function toast(message, isError = false, detail = '') {
     const node = document.getElementById('toast');
-    node.textContent = message;
+    if (!node) { console[isError ? 'error' : 'log'](message, detail); return; }
+    node.innerHTML = '';
+    node.appendChild(el('div', { text: message }));
+    if (detail) node.appendChild(el('div', { class: 'loc', text: detail }));
     node.classList.toggle('error', !!isError);
     node.hidden = false;
+    node.onclick = () => { node.hidden = true; };
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => { node.hidden = true; }, isError ? 5200 : 2400);
+    // Errors carry a location worth reading; give them longer on screen.
+    toastTimer = setTimeout(() => { node.hidden = true; }, isError ? 12000 : 2400);
+  }
+
+  /** "app.js:98:32" - the first frame of the stack that names one of our files.
+   *  Firefox frames look like `openSession@http://host/static/js/app.js:98:32`,
+   *  Chrome's like `    at openSession (http://host/static/js/app.js:98:32)`;
+   *  the file:line:col tail is the same in both. */
+  function origin(err) {
+    const stack = (err && err.stack) || '';
+    for (const line of stack.split('\n')) {
+      const m = line.match(/([\w.-]+\.js):(\d+):(\d+)/);
+      if (m) return `${m[1]}:${m[2]}:${m[3]}`;
+    }
+    return '';
+  }
+
+  /** Report a caught error usefully: full object to the console (so the
+   *  stack is one click away), message + file:line to the toast. */
+  function fail(err, context = '') {
+    console.error(context ? `${context}:` : 'error:', err);
+    const message = (err && err.message) || String(err);
+    const loc = origin(err);
+    const fn = (err && err.stack || '').match(/(?:at |^)\s*([\w.$<>]+)\s*[@(]/m);
+    const detail = [loc, fn && fn[1] !== 'Object' ? `in ${fn[1]}()` : ''].filter(Boolean).join('  ');
+    toast(context ? `${context}: ${message}` : message, true, detail);
+  }
+
+  /** Nothing should reach the user as a bare TypeError with no location. */
+  function installErrorReporting() {
+    window.addEventListener('error', (e) => {
+      if (e.error) fail(e.error, 'Uncaught');
+      else toast(`Uncaught: ${e.message}`, true, `${(e.filename || '').split('/').pop()}:${e.lineno}:${e.colno}`);
+    });
+    window.addEventListener('unhandledrejection', (e) => fail(e.reason, 'Unhandled promise rejection'));
   }
 
   /** True when focus is somewhere the user is typing, so shortcuts back off. */
@@ -85,5 +134,5 @@ const U = (() => {
     return !!a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.tagName === 'SELECT' || a.isContentEditable);
   }
 
-  return { tc, dur, clamp, el, uid, debounce, api, toast, typing };
+  return { tc, dur, clamp, el, uid, debounce, api, toast, typing, asText, fail, origin, installErrorReporting };
 })();
