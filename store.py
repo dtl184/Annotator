@@ -56,7 +56,7 @@ DEFAULT_COLORS = [
 DEFAULT_STYLES = [
     {"id": "st_main", "name": "main", "color": DEFAULT_COLORS[0]},
     {"id": "st_recovery", "name": "recovery", "color": DEFAULT_COLORS[1]},
-    {"id": "st_prevention", "name": "prevention", "color": DEFAULT_COLORS[2]},
+    {"id": "st_gripper", "name": "gripper", "color": DEFAULT_COLORS[2]},
 ]
 
 
@@ -135,9 +135,9 @@ class ProjectStore:
             "episodes": timeline["episodes"],
             "styles": [dict(s) for s in DEFAULT_STYLES],
             "layers": [
-                {"id": "ly_1", "style_id": "st_phase", "clips": []},
-                {"id": "ly_2", "style_id": "st_outcome", "clips": []},
-                {"id": "ly_3", "style_id": "st_notes", "clips": []},
+                {"id": "ly_1", "style_id": DEFAULT_STYLES[0]["id"], "clips": []},
+                {"id": "ly_2", "style_id": DEFAULT_STYLES[1]["id"], "clips": []},
+                {"id": "ly_3", "style_id": DEFAULT_STYLES[2]["id"], "clips": []},
             ],
         }
 

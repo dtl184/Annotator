@@ -315,11 +315,8 @@ def api_export(fmt: str) -> Response:
     if fmt == "json":
         return Response(json.dumps(project, indent=2) + "\n", mimetype="application/json",
                         headers={"Content-Disposition": f'attachment; filename="{stem}.json"'})
-    if fmt == "csv":
-        buf = io.StringIO()
-        csv.writer(buf).writerows(to_csv_rows(project))
-        return Response(buf.getvalue(), mimetype="text/csv",
-                        headers={"Content-Disposition": f'attachment; filename="{stem}.csv"'})
+    if fmt == "lerobot":
+        
     abort(400, f"Unknown export format: {fmt}")
 
 
