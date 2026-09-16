@@ -54,9 +54,9 @@ DEFAULT_COLORS = [
 ]
 
 DEFAULT_STYLES = [
-    {"id": "st_phase", "name": "phase", "color": DEFAULT_COLORS[0]},
-    {"id": "st_outcome", "name": "outcome", "color": DEFAULT_COLORS[1]},
-    {"id": "st_notes", "name": "notes", "color": DEFAULT_COLORS[2]},
+    {"id": "st_main", "name": "main", "color": DEFAULT_COLORS[0]},
+    {"id": "st_recovery", "name": "recovery", "color": DEFAULT_COLORS[1]},
+    {"id": "st_prevention", "name": "prevention", "color": DEFAULT_COLORS[2]},
 ]
 
 
