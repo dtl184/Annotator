@@ -67,7 +67,7 @@ const U = (() => {
       clearTimeout(t);
       t = setTimeout(() => fn(...args), ms);
     };
-    wrapped.flush = (...args) => { clearTimeout(t); fn(...args); };
+    wrapped.flush = (...args) => { clearTimeout(t); return fn(...args); };
     return wrapped;
   }
 

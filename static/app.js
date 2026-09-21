@@ -19,6 +19,13 @@ const state = {
 // Must match API_VERSION in app.py. See checkApi() for why this exists.
 const API_VERSION = 2;
 
+// Host of the separate gemini-annotator-pipeline `serve` process backing the
+// "Annotate whole video" button - not part of this app, and not imported
+// into it; see that project's README ("GUI integration") for why. Derived
+// from the current hostname (not hardcoded 127.0.0.1) so it still resolves
+// correctly when this page is reached through an SSH port forward.
+const GEMINI_PIPELINE_URL = `${location.protocol}//${location.hostname}:5114`;
+
 const PALETTE = ['#6EA8FF', '#7ED9A7', '#E2A0FF', '#F2B45C', '#7FD6E8', '#FF9BA8', '#B9CE6A', '#C3A1F0'];
 
 
@@ -465,6 +472,7 @@ const actions = {
   'step-back': () => player.step(-1),
   'step-fwd': () => player.step(1),
   'auto-annotate-segment': () => { timeline.autoAnnotateSegment(); refreshAutoAnnotateSegment(); },
+  'annotate-whole-video': () => annotateWholeVideo(),
   'mark-in': () => { timeline.mark('in'); refreshCreateButton(); },
   'mark-out': () => { timeline.mark('out'); refreshCreateButton(); },
   'create-clip': () => { timeline.createClip(); refreshCreateButton(); },
@@ -595,7 +603,52 @@ function exportPayload(extra) {
     root: state.root, scope: state.scope, chunk: state.chunk, file: state.file, ...extra,
   });
 }
- 
+
+/** Talks to the separate gemini-annotator-pipeline `serve` process (a
+ *  different port, see GEMINI_PIPELINE_URL) - never runs on its own, only
+ *  from this explicit button click. Gemini detects episode boundaries
+ *  itself rather than trusting this dataset's own episode metadata, so it
+ *  works the same way whether or not that metadata exists. */
+async function annotateWholeVideo() {
+  if (!state.root) { U.toast('Open a dataset first'); return; }
+  if (state.scope !== 'dataset') {
+    U.toast('Switch to "Whole recording" first - this annotates the whole open recording.', true);
+    return;
+  }
+  const proceed = confirm(
+    'Annotate the whole open recording with Gemini?\n\n'
+    + 'This makes real Gemini API calls and can take several minutes for a long recording. '
+    + 'Existing main / subtask / atomic / recovery clips across the whole recording will be replaced.'
+  );
+  if (!proceed) return;
+
+  await saveSoon.flush();
+  const btn = $('annotate-whole-btn');
+  const originalLabel = btn.textContent;
+  btn.disabled = true;
+  let elapsed = 0;
+  const timer = setInterval(() => { elapsed += 1; btn.textContent = `Annotating… ${elapsed}s`; }, 1000);
+
+  try {
+    const result = await U.api(`${GEMINI_PIPELINE_URL}/annotate-whole-video`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ root: state.root }),
+    });
+    U.toast(
+      `Annotated ${result.episodes_detected} episode(s): ${result.subtask_clips} subtask, `
+      + `${result.atomic_clips} atomic, ${result.recovery_clips} recovery clip(s)`
+    );
+    await openSession(state.root, state.scope, state.chunk, state.file);
+  } catch (err) {
+    U.fail(err, 'Annotate whole video (is `gemini-annotator serve` running?)');
+  } finally {
+    clearInterval(timer);
+    btn.disabled = false;
+    btn.textContent = originalLabel;
+  }
+}
+
 async function exportToLeRobot() {
   if (!state.root) { U.toast('Open a dataset first'); return; }
   saveSoon.flush();
